@@ -19,32 +19,89 @@ app.get('/api/data', (req, res) => {
 
 // Register route
 app.post('/api/register', async (req, res) => {
-  const { username, password } = req.body;
+  const {
+    username,
+    email,
+    password,
+    first_name,
+    surname,
+    second_surname
+  } = req.body;
 
-  if (!username || !password) {
-    return res.status(400).json({ message: 'Username and password required' });
+  // Validate required fields
+  if (!username || !email || !password || !first_name || !surname) {
+    return res.status(400).json({
+      message: 'Username, email, password, first_name, and surname are required'
+    });
   }
 
   try {
-    // Check if user exists
-    const userCheck = await db.query('SELECT * FROM users WHERE username = $1', [username]);
-    if (userCheck.rows.length > 0) {
-      return res.status(409).json({ message: 'Username already exists' });
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Insert user
-    const newUser = await db.query(
-      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
-      [username, hashedPassword]
+    // Check if username already exists
+    const usernameCheck = await db.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
     );
 
-    res.status(201).json({ message: 'User registered successfully', user: newUser.rows[0] });
+    if (usernameCheck.rows.length > 0) {
+      return res.status(409).json({
+        message: 'Username already exists'
+      });
+    }
+
+    // Check if email already exists
+    const emailCheck = await db.query(
+      'SELECT * FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (emailCheck.rows.length > 0) {
+      return res.status(409).json({
+        message: 'Email already exists'
+      });
+    }
+
+    // Hash password for password_hash column
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Insert new user into database
+    const newUser = await db.query(
+      `INSERT INTO users (
+        username,
+        email,
+        password_hash,
+        first_name,
+        surname,
+        second_surname
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING
+        id,
+        username,
+        email,
+        first_name,
+        surname,
+        second_surname,
+        created_at`,
+      [
+        username,
+        email,
+        hashedPassword,
+        first_name,
+        surname,
+        second_surname || null
+      ]
+    );
+
+    res.status(201).json({
+      message: 'User registered successfully',
+      user: newUser.rows[0]
+    });
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error registering user' });
+    res.status(500).json({
+      message: 'Error registering user'
+    });
   }
 });
 
