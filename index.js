@@ -105,7 +105,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Login route
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
@@ -114,7 +113,6 @@ app.post('/api/login', async (req, res) => {
   }
 
   try {
-    // Find user
     const result = await db.query('SELECT * FROM users WHERE username = $1', [username]);
     const user = result.rows[0];
 
@@ -122,18 +120,26 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
-    // Validate password
-    const validPassword = await bcrypt.compare(password, user.password);
+    const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
-    // Generate token
     jwt.sign({ id: user.id, username: user.username }, secretKey, { expiresIn: '30m' }, (err, token) => {
       if (err) {
         return res.status(500).json({ message: 'Error generating token' });
       }
-      res.json({ token });
+      res.json({ 
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          first_name: user.first_name,
+          surname: user.surname,
+          second_surname: user.second_surname
+        }
+      });
     });
   } catch (err) {
     console.error(err);
