@@ -176,7 +176,8 @@ app.get('/api/profile', verifyToken, async (req, res) => {
 app.post('/api/profile', verifyToken, async (req, res) => {
   const {
     first_name, surname_1, surname_2, birth_date, document_number,
-    document_type, phone, address, postal_code, province, autonomous_community
+    document_type, phone, address, postal_code, province, autonomous_community,
+    is_gender_violence_victim
   } = req.body;
 
   try {
@@ -188,9 +189,10 @@ app.post('/api/profile', verifyToken, async (req, res) => {
     const result = await db.query(
       `INSERT INTO profiles (
         user_id, first_name, surname_1, surname_2, birth_date, document_number,
-        document_type, phone, address, postal_code, province, autonomous_community
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-      [req.user.id, first_name, surname_1, surname_2, birth_date, document_number, document_type, phone, address, postal_code, province, autonomous_community]
+        document_type, phone, address, postal_code, province, autonomous_community,
+        is_gender_violence_victim
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      [req.user.id, first_name, surname_1, surname_2, birth_date, document_number, document_type, phone, address, postal_code, province, autonomous_community, is_gender_violence_victim]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -202,7 +204,8 @@ app.post('/api/profile', verifyToken, async (req, res) => {
 app.put('/api/profile', verifyToken, async (req, res) => {
   const {
     first_name, surname_1, surname_2, birth_date, document_number,
-    document_type, phone, address, postal_code, province, autonomous_community
+    document_type, phone, address, postal_code, province, autonomous_community,
+    is_gender_violence_victim
   } = req.body;
 
   try {
@@ -218,9 +221,10 @@ app.put('/api/profile', verifyToken, async (req, res) => {
         address = COALESCE($8, address),
         postal_code = COALESCE($9, postal_code),
         province = COALESCE($10, province),
-        autonomous_community = COALESCE($11, autonomous_community)
-       WHERE user_id = $12 RETURNING *`,
-      [first_name, surname_1, surname_2, birth_date, document_number, document_type, phone, address, postal_code, province, autonomous_community, req.user.id]
+        autonomous_community = COALESCE($11, autonomous_community),
+        is_gender_violence_victim = COALESCE($12, is_gender_violence_victim)
+       WHERE user_id = $13 RETURNING *`,
+      [first_name, surname_1, surname_2, birth_date, document_number, document_type, phone, address, postal_code, province, autonomous_community, is_gender_violence_victim, req.user.id]
     );
 
     if (result.rows.length === 0) {
@@ -254,7 +258,7 @@ app.post('/api/socio-economic', verifyToken, async (req, res) => {
   const {
     education_level, employment_status, gross_annual_income, is_large_family,
     large_family_category, has_disability, disability_percentage,
-    is_single_parent, exclusion_risk
+    is_single_parent, exclusion_risk, dependency_grade, number_of_children
   } = req.body;
 
   try {
@@ -266,9 +270,10 @@ app.post('/api/socio-economic', verifyToken, async (req, res) => {
     const result = await db.query(
       `INSERT INTO socio_economic_data (
         user_id, education_level, employment_status, gross_annual_income, is_large_family,
-        large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [req.user.id, education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk]
+        large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk,
+        dependency_grade, number_of_children
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [req.user.id, education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk, dependency_grade, number_of_children]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -281,7 +286,7 @@ app.put('/api/socio-economic', verifyToken, async (req, res) => {
   const {
     education_level, employment_status, gross_annual_income, is_large_family,
     large_family_category, has_disability, disability_percentage,
-    is_single_parent, exclusion_risk
+    is_single_parent, exclusion_risk, dependency_grade, number_of_children
   } = req.body;
 
   try {
@@ -295,9 +300,11 @@ app.put('/api/socio-economic', verifyToken, async (req, res) => {
         has_disability = COALESCE($6, has_disability),
         disability_percentage = COALESCE($7, disability_percentage),
         is_single_parent = COALESCE($8, is_single_parent),
-        exclusion_risk = COALESCE($9, exclusion_risk)
-       WHERE user_id = $10 RETURNING *`,
-      [education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk, req.user.id]
+        exclusion_risk = COALESCE($9, exclusion_risk),
+        dependency_grade = COALESCE($10, dependency_grade),
+        number_of_children = COALESCE($11, number_of_children)
+       WHERE user_id = $12 RETURNING *`,
+      [education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk, dependency_grade, number_of_children, req.user.id]
     );
 
     if (result.rows.length === 0) {
@@ -326,15 +333,15 @@ app.get('/api/housemates', verifyToken, async (req, res) => {
 
 app.post('/api/housemates', verifyToken, async (req, res) => {
   const {
-    full_name, relation, document_number, lives_with, is_dependent, income_annual
+    full_name, relation, document_number, lives_with, is_dependent, income_annual, birth_date
   } = req.body;
 
   try {
     const result = await db.query(
       `INSERT INTO housemates (
-        user_id, full_name, relation, document_number, lives_with, is_dependent, income_annual
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.user.id, full_name, relation, document_number, lives_with, is_dependent, income_annual]
+        user_id, full_name, relation, document_number, lives_with, is_dependent, income_annual, birth_date
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [req.user.id, full_name, relation, document_number, lives_with, is_dependent, income_annual, birth_date]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -346,7 +353,7 @@ app.post('/api/housemates', verifyToken, async (req, res) => {
 app.put('/api/housemates/:id', verifyToken, async (req, res) => {
   const housemateId = req.params.id;
   const {
-    full_name, relation, document_number, lives_with, is_dependent, income_annual
+    full_name, relation, document_number, lives_with, is_dependent, income_annual, birth_date
   } = req.body;
 
   try {
@@ -357,9 +364,10 @@ app.put('/api/housemates/:id', verifyToken, async (req, res) => {
         document_number = COALESCE($3, document_number),
         lives_with = COALESCE($4, lives_with),
         is_dependent = COALESCE($5, is_dependent),
-        income_annual = COALESCE($6, income_annual)
-       WHERE id = $7 AND user_id = $8 RETURNING *`,
-      [full_name, relation, document_number, lives_with, is_dependent, income_annual, housemateId, req.user.id]
+        income_annual = COALESCE($6, income_annual),
+        birth_date = COALESCE($7, birth_date)
+       WHERE id = $8 AND user_id = $9 RETURNING *`,
+      [full_name, relation, document_number, lives_with, is_dependent, income_annual, birth_date, housemateId, req.user.id]
     );
 
     if (result.rows.length === 0) {
