@@ -10,7 +10,18 @@ const port = 3000;
 const secretKey = 'your-secret-key';
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '20mb' }));
+app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
+
+// Ensure document_pdf column exists
+(async () => {
+  try {
+    await db.query('ALTER TABLE user_applications ADD COLUMN IF NOT EXISTS document_pdf BYTEA');
+    console.log('Ensured document_pdf column exists in user_applications');
+  } catch (err) {
+    console.error('Migration error: could not add document_pdf column', err);
+  }
+})();
 
 // Public route
 app.get('/api/data', (req, res) => {
@@ -71,6 +82,8 @@ app.post('/api/register', async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [newUser.rows[0].id, first_name, surname_1, surname_2 || null, birth_date, document_number, document_type || 'DNI']
     );
+
+    await recalculateMatchesForUser(newUser.rows[0].id);
 
     res.status(201).json({
       message: 'User registered successfully. Profile created.',
@@ -308,6 +321,9 @@ app.post('/api/socio-economic', verifyToken, async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [req.user.id, education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk, dependency_grade, number_of_children]
     );
+
+    await recalculateMatchesForUser(req.user.id);
+
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
@@ -343,6 +359,9 @@ app.put('/api/socio-economic', verifyToken, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Socio-economic data not found' });
     }
+
+    await recalculateMatchesForUser(req.user.id);
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
@@ -518,6 +537,60 @@ app.put('/api/applications/:id', verifyToken, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Error updating application' });
+  }
+});
+
+// Upload PDF document
+app.put('/api/applications/:id/document', verifyToken, async (req, res) => {
+  const applicationId = req.params.id;
+  const { document_pdf } = req.body;
+
+  if (!document_pdf) {
+    return res.status(400).json({ message: 'document_pdf is required' });
+  }
+
+  try {
+    const check = await db.query('SELECT id FROM user_applications WHERE id = $1 AND user_id = $2', [applicationId, req.user.id]);
+    if (check.rows.length === 0) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
+    const base64Data = document_pdf.replace(/^data:application\/pdf;base64,/, "");
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    await db.query(
+      'UPDATE user_applications SET document_pdf = $1 WHERE id = $2',
+      [buffer, applicationId]
+    );
+
+    res.json({ message: 'Document uploaded successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error uploading document' });
+  }
+});
+
+// Retrieve PDF document
+app.get('/api/applications/:id/document', verifyToken, async (req, res) => {
+  const applicationId = req.params.id;
+
+  try {
+    const result = await db.query('SELECT document_pdf FROM user_applications WHERE id = $1 AND user_id = $2', [applicationId, req.user.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
+    const doc = result.rows[0].document_pdf;
+    if (!doc) {
+      return res.status(404).json({ message: 'No document attached' });
+    }
+
+    const base64 = doc.toString('base64');
+    res.json({ document_pdf: `data:application/pdf;base64,${base64}` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving document' });
   }
 });
 
@@ -726,6 +799,34 @@ function calculateGrantScore(userSocioEconomicData, eligibilityRules) {
   if (!is_eligible) score = 0;
 
   return { score, is_eligible, reasons };
+}
+
+async function recalculateMatchesForUser(userId) {
+  try {
+    const usersRes = await db.query(`
+      SELECT u.id, s.employment_status, s.is_large_family, s.has_disability, s.is_single_parent, s.exclusion_risk 
+      FROM users u
+      LEFT JOIN socio_economic_data s ON u.id = s.user_id
+      WHERE u.id = $1
+    `, [userId]);
+
+    if (usersRes.rows.length === 0) return;
+    const user = usersRes.rows[0];
+
+    const grantsRes = await db.query(`SELECT id, eligibility_rules FROM government_grants`);
+
+    await db.query(`DELETE FROM grant_matches WHERE user_id = $1`, [userId]);
+
+    for (const grant of grantsRes.rows) {
+      const match = calculateGrantScore(user, grant.eligibility_rules);
+      await db.query(`
+        INSERT INTO grant_matches (user_id, grant_id, eligibility_score, is_eligible, reasons)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [user.id, grant.id, match.score, match.is_eligible, JSON.stringify(match.reasons)]);
+    }
+  } catch (err) {
+    console.error(`Error recalculando matches para el usuario ${userId}:`, err);
+  }
 }
 
 // ==========================================
