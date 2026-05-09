@@ -19,12 +19,12 @@ app.get('/api/data', (req, res) => {
 
 // Register route
 app.post('/api/register', async (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email, password, first_name, surname_1, surname_2, document_number, document_type, birth_date } = req.body;
 
   // Validate required fields
-  if (!username || !email || !password) {
+  if (!username || !email || !password || !first_name || !surname_1 || !document_number || !birth_date) {
     return res.status(400).json({
-      message: 'Username, email, and password are required'
+      message: 'Missing required fields for registration'
     });
   }
 
@@ -64,8 +64,16 @@ app.post('/api/register', async (req, res) => {
       [username, email, hashedPassword]
     );
 
+    // Insert profile
+    await db.query(
+      `INSERT INTO profiles (
+        user_id, first_name, surname_1, surname_2, birth_date, document_number, document_type
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [newUser.rows[0].id, first_name, surname_1, surname_2 || null, birth_date, document_number, document_type || 'DNI']
+    );
+
     res.status(201).json({
-      message: 'User registered successfully. Please complete your profile.',
+      message: 'User registered successfully. Profile created.',
       user: newUser.rows[0]
     });
 
@@ -91,7 +99,7 @@ app.post('/api/login', async (req, res) => {
       LEFT JOIN profiles p ON u.id = p.user_id 
       WHERE u.username = $1
     `, [username]);
-    
+
     const user = result.rows[0];
 
     if (!user) {
@@ -107,7 +115,7 @@ app.post('/api/login', async (req, res) => {
       if (err) {
         return res.status(500).json({ message: 'Error generating token' });
       }
-      res.json({ 
+      res.json({
         token,
         user: {
           id: user.id,
@@ -125,17 +133,42 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// Change Password route
+app.put('/api/change-password', verifyToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: 'Current password and new password are required' });
+  }
+
+  try {
+    const result = await db.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ message: 'Invalid current password' });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedNewPassword, req.user.id]);
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error changing password' });
+  }
+});
+
 // Protected route
 app.get('/api/protected', verifyToken, (req, res) => {
-  jwt.verify(req.token, secretKey, (err, authData) => {
-    if (err) {
-      res.sendStatus(403);
-    } else {
-      res.json({
-        message: 'This is protected data',
-        authData
-      });
-    }
+  res.json({
+    message: 'This is protected data',
+    authData: req.user
   });
 });
 
