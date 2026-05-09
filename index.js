@@ -627,6 +627,33 @@ app.delete('/api/grant-matches/:id', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// UTILITY FUNCTIONS
+// ==========================================
+
+function parseEligibilityRules(title, description) {
+  const text = (title + ' ' + description).toLowerCase();
+  const rules = {};
+
+  if (text.includes('monoparental') || text.includes('monomarental')) {
+    rules.is_single_parent = true;
+  }
+  if (text.includes('desempleo') || text.includes('desempleado') || text.includes('desempleada') || text.match(/\bparo\b/)) {
+    rules.employment_status = 'unemployed';
+  }
+  if (text.includes('discapacidad') || text.includes('discapacitado') || text.includes('minusvalía')) {
+    rules.has_disability = true;
+  }
+  if (text.includes('familia numerosa')) {
+    rules.is_large_family = true;
+  }
+  if (text.includes('exclusión social') || text.includes('vulnerabilidad')) {
+    rules.exclusion_risk = true;
+  }
+
+  return Object.keys(rules).length > 0 ? rules : null;
+}
+
+// ==========================================
 // CRON JOBS ENDPOINTS
 // ==========================================
 
@@ -652,6 +679,7 @@ app.get('/api/cron/sync-grants', async (req, res) => {
     }
     
     let inserted = 0;
+    let newGrantIds = [];
     for (const item of data) {
       const external_id = item.numeroConvocatoria || item.id?.toString();
       if (!external_id) continue;
@@ -676,13 +704,39 @@ app.get('/api/cron/sync-grants', async (req, res) => {
           link_info = `https://www.pap.hacienda.gob.es/bdnstrans/GE/es${item.rutaConvocatoria.substring(2)}`;
       }
 
-      await db.query(
+      const eligibility_rules = parseEligibilityRules(title, description);
+
+      const resInsert = await db.query(
         `INSERT INTO government_grants (
-          external_id, title, description, scope, region_filter, opening_date, source, link_info
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [external_id, title, description, scope, region_filter, opening_date, source, link_info]
+          external_id, title, description, scope, region_filter, opening_date, source, link_info, eligibility_rules
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+        [external_id, title, description, scope, region_filter, opening_date, source, link_info, eligibility_rules ? JSON.stringify(eligibility_rules) : null]
       );
-      inserted++;
+      
+      if (resInsert.rows.length > 0) {
+        newGrantIds.push(resInsert.rows[0].id);
+        inserted++;
+      }
+    }
+
+    // Actualizar Grant Matches para las nuevas convocatorias
+    if (newGrantIds.length > 0) {
+      try {
+        const usersRes = await db.query('SELECT id FROM users');
+        for (const user of usersRes.rows) {
+          for (const grantId of newGrantIds) {
+            // Se inserta un match base con puntuación 50 y estado true por defecto
+            // Más adelante se puede ampliar con lógica compleja de scoring regional o económica
+            await db.query(`
+              INSERT INTO grant_matches (user_id, grant_id, eligibility_score, is_eligible, reasons)
+              VALUES ($1, $2, $3, $4, $5)
+            `, [user.id, grantId, 50, true, JSON.stringify(["Nueva ayuda encontrada. Pendiente de revisión exhaustiva."])]);
+          }
+        }
+        console.log(`Se han actualizado los grant_matches para ${usersRes.rows.length} usuarios y ${newGrantIds.length} ayudas.`);
+      } catch (matchErr) {
+        console.error('Error actualizando grant_matches:', matchErr);
+      }
     }
 
     res.status(200).json({ message: `Sincronización completada. ${inserted} nuevas convocatorias insertadas.` });
