@@ -653,6 +653,81 @@ function parseEligibilityRules(title, description) {
   return Object.keys(rules).length > 0 ? rules : null;
 }
 
+function calculateGrantScore(userSocioEconomicData, eligibilityRules) {
+  let score = 50;
+  let is_eligible = true;
+  const reasons = [];
+
+  if (!eligibilityRules || Object.keys(eligibilityRules).length === 0) {
+    reasons.push('Cumple requisitos generales (no hay requisitos específicos).');
+    return { score, is_eligible, reasons };
+  }
+
+  const userData = userSocioEconomicData || {};
+
+  if (eligibilityRules.is_single_parent) {
+    if (userData.is_single_parent) {
+      score += 20;
+      reasons.push('Cumples el requisito de familia monoparental.');
+    } else {
+      score = 0;
+      is_eligible = false;
+      reasons.push('No cumples el requisito de familia monoparental.');
+    }
+  }
+
+  if (eligibilityRules.has_disability) {
+    if (userData.has_disability) {
+      score += 20;
+      reasons.push('Cumples el requisito de discapacidad.');
+    } else {
+      score = 0;
+      is_eligible = false;
+      reasons.push('No cumples el requisito de discapacidad.');
+    }
+  }
+
+  if (eligibilityRules.is_large_family) {
+    if (userData.is_large_family) {
+      score += 20;
+      reasons.push('Cumples el requisito de familia numerosa.');
+    } else {
+      score = 0;
+      is_eligible = false;
+      reasons.push('No cumples el requisito de familia numerosa.');
+    }
+  }
+
+  if (eligibilityRules.exclusion_risk) {
+    if (userData.exclusion_risk) {
+      score += 20;
+      reasons.push('Cumples el requisito de riesgo de exclusión social.');
+    } else {
+      score = 0;
+      is_eligible = false;
+      reasons.push('No cumples el requisito de riesgo de exclusión social.');
+    }
+  }
+
+  if (eligibilityRules.employment_status === 'unemployed') {
+    const status = (userData.employment_status || '').toLowerCase();
+    if (status.includes('unemployed') || status.includes('desempleado') || status.includes('paro')) {
+      score += 20;
+      reasons.push('Cumples el requisito de situación de desempleo.');
+    } else {
+      score = 0;
+      is_eligible = false;
+      reasons.push('No cumples el requisito de situación de desempleo.');
+    }
+  }
+
+  // Si después de evaluar todo sigue elegible, sumar puntos por match.
+  // Si no, forzar a 0 aunque haya sumado algo.
+  if (!is_eligible) score = 0;
+
+  return { score, is_eligible, reasons };
+}
+
 // ==========================================
 // CRON JOBS ENDPOINTS
 // ==========================================
@@ -714,7 +789,7 @@ app.get('/api/cron/sync-grants', async (req, res) => {
       );
       
       if (resInsert.rows.length > 0) {
-        newGrantIds.push(resInsert.rows[0].id);
+        newGrantIds.push({ id: resInsert.rows[0].id, rules: eligibility_rules });
         inserted++;
       }
     }
@@ -722,15 +797,19 @@ app.get('/api/cron/sync-grants', async (req, res) => {
     // Actualizar Grant Matches para las nuevas convocatorias
     if (newGrantIds.length > 0) {
       try {
-        const usersRes = await db.query('SELECT id FROM users');
+        const usersRes = await db.query(`
+          SELECT u.id, s.employment_status, s.is_large_family, s.has_disability, s.is_single_parent, s.exclusion_risk 
+          FROM users u
+          LEFT JOIN socio_economic_data s ON u.id = s.user_id
+        `);
         for (const user of usersRes.rows) {
-          for (const grantId of newGrantIds) {
-            // Se inserta un match base con puntuación 50 y estado true por defecto
-            // Más adelante se puede ampliar con lógica compleja de scoring regional o económica
+          for (const grant of newGrantIds) {
+            const match = calculateGrantScore(user, grant.rules);
+            
             await db.query(`
               INSERT INTO grant_matches (user_id, grant_id, eligibility_score, is_eligible, reasons)
               VALUES ($1, $2, $3, $4, $5)
-            `, [user.id, grantId, 50, true, JSON.stringify(["Nueva ayuda encontrada. Pendiente de revisión exhaustiva."])]);
+            `, [user.id, grant.id, match.score, match.is_eligible, JSON.stringify(match.reasons)]);
           }
         }
         console.log(`Se han actualizado los grant_matches para ${usersRes.rows.length} usuarios y ${newGrantIds.length} ayudas.`);
