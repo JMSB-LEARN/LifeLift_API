@@ -19,19 +19,12 @@ app.get('/api/data', (req, res) => {
 
 // Register route
 app.post('/api/register', async (req, res) => {
-  const {
-    username,
-    email,
-    password,
-    first_name,
-    surname,
-    second_surname
-  } = req.body;
+  const { username, email, password } = req.body;
 
   // Validate required fields
-  if (!username || !email || !password || !first_name || !surname) {
+  if (!username || !email || !password) {
     return res.status(400).json({
-      message: 'Username, email, password, first_name, and surname are required'
+      message: 'Username, email, and password are required'
     });
   }
 
@@ -65,35 +58,14 @@ app.post('/api/register', async (req, res) => {
 
     // Insert new user into database
     const newUser = await db.query(
-      `INSERT INTO users (
-        username,
-        email,
-        password_hash,
-        first_name,
-        surname,
-        second_surname
-      )
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING
-        id,
-        username,
-        email,
-        first_name,
-        surname,
-        second_surname,
-        created_at`,
-      [
-        username,
-        email,
-        hashedPassword,
-        first_name,
-        surname,
-        second_surname || null
-      ]
+      `INSERT INTO users (username, email, password_hash)
+       VALUES ($1, $2, $3)
+       RETURNING id, username, email, created_at`,
+      [username, email, hashedPassword]
     );
 
     res.status(201).json({
-      message: 'User registered successfully',
+      message: 'User registered successfully. Please complete your profile.',
       user: newUser.rows[0]
     });
 
@@ -113,7 +85,13 @@ app.post('/api/login', async (req, res) => {
   }
 
   try {
-    const result = await db.query('SELECT * FROM users WHERE username = $1', [username]);
+    const result = await db.query(`
+      SELECT u.*, p.first_name, p.surname_1 as surname, p.surname_2 as second_surname 
+      FROM users u 
+      LEFT JOIN profiles p ON u.id = p.user_id 
+      WHERE u.username = $1
+    `, [username]);
+    
     const user = result.rows[0];
 
     if (!user) {
@@ -125,7 +103,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
-    jwt.sign({ id: user.id, username: user.username }, secretKey, { expiresIn: '30m' }, (err, token) => {
+    jwt.sign({ id: user.id, username: user.username }, secretKey, { expiresIn: '24h' }, (err, token) => {
       if (err) {
         return res.status(500).json({ message: 'Error generating token' });
       }
@@ -165,14 +143,253 @@ app.get('/api/protected', verifyToken, (req, res) => {
 function verifyToken(req, res, next) {
   const bearerHeader = req.headers['authorization'];
   if (typeof bearerHeader !== 'undefined') {
-    const bearer = bearerHeader.split(' ');
-    const bearerToken = bearer[1];
-    req.token = bearerToken;
-    next();
+    const bearerToken = bearerHeader.split(' ')[1];
+    jwt.verify(bearerToken, secretKey, (err, authData) => {
+      if (err) {
+        return res.sendStatus(403);
+      }
+      req.user = authData;
+      next();
+    });
   } else {
     res.sendStatus(403);
   }
 }
+
+// ==========================================
+// PROFILES ENDPOINTS
+// ==========================================
+
+app.get('/api/profile', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM profiles WHERE user_id = $1', [req.user.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving profile' });
+  }
+});
+
+app.post('/api/profile', verifyToken, async (req, res) => {
+  const {
+    first_name, surname_1, surname_2, birth_date, document_number,
+    document_type, phone, address, postal_code, province, autonomous_community
+  } = req.body;
+
+  try {
+    const check = await db.query('SELECT * FROM profiles WHERE user_id = $1', [req.user.id]);
+    if (check.rows.length > 0) {
+      return res.status(409).json({ message: 'Profile already exists. Use PUT to update.' });
+    }
+
+    const result = await db.query(
+      `INSERT INTO profiles (
+        user_id, first_name, surname_1, surname_2, birth_date, document_number,
+        document_type, phone, address, postal_code, province, autonomous_community
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [req.user.id, first_name, surname_1, surname_2, birth_date, document_number, document_type, phone, address, postal_code, province, autonomous_community]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error creating profile' });
+  }
+});
+
+app.put('/api/profile', verifyToken, async (req, res) => {
+  const {
+    first_name, surname_1, surname_2, birth_date, document_number,
+    document_type, phone, address, postal_code, province, autonomous_community
+  } = req.body;
+
+  try {
+    const result = await db.query(
+      `UPDATE profiles SET 
+        first_name = COALESCE($1, first_name),
+        surname_1 = COALESCE($2, surname_1),
+        surname_2 = COALESCE($3, surname_2),
+        birth_date = COALESCE($4, birth_date),
+        document_number = COALESCE($5, document_number),
+        document_type = COALESCE($6, document_type),
+        phone = COALESCE($7, phone),
+        address = COALESCE($8, address),
+        postal_code = COALESCE($9, postal_code),
+        province = COALESCE($10, province),
+        autonomous_community = COALESCE($11, autonomous_community)
+       WHERE user_id = $12 RETURNING *`,
+      [first_name, surname_1, surname_2, birth_date, document_number, document_type, phone, address, postal_code, province, autonomous_community, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error updating profile' });
+  }
+});
+
+// ==========================================
+// SOCIO-ECONOMIC DATA ENDPOINTS
+// ==========================================
+
+app.get('/api/socio-economic', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM socio_economic_data WHERE user_id = $1', [req.user.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Socio-economic data not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving socio-economic data' });
+  }
+});
+
+app.post('/api/socio-economic', verifyToken, async (req, res) => {
+  const {
+    education_level, employment_status, gross_annual_income, is_large_family,
+    large_family_category, has_disability, disability_percentage,
+    is_single_parent, exclusion_risk
+  } = req.body;
+
+  try {
+    const check = await db.query('SELECT * FROM socio_economic_data WHERE user_id = $1', [req.user.id]);
+    if (check.rows.length > 0) {
+      return res.status(409).json({ message: 'Data already exists. Use PUT to update.' });
+    }
+
+    const result = await db.query(
+      `INSERT INTO socio_economic_data (
+        user_id, education_level, employment_status, gross_annual_income, is_large_family,
+        large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [req.user.id, education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error creating socio-economic data' });
+  }
+});
+
+app.put('/api/socio-economic', verifyToken, async (req, res) => {
+  const {
+    education_level, employment_status, gross_annual_income, is_large_family,
+    large_family_category, has_disability, disability_percentage,
+    is_single_parent, exclusion_risk
+  } = req.body;
+
+  try {
+    const result = await db.query(
+      `UPDATE socio_economic_data SET 
+        education_level = COALESCE($1, education_level),
+        employment_status = COALESCE($2, employment_status),
+        gross_annual_income = COALESCE($3, gross_annual_income),
+        is_large_family = COALESCE($4, is_large_family),
+        large_family_category = COALESCE($5, large_family_category),
+        has_disability = COALESCE($6, has_disability),
+        disability_percentage = COALESCE($7, disability_percentage),
+        is_single_parent = COALESCE($8, is_single_parent),
+        exclusion_risk = COALESCE($9, exclusion_risk)
+       WHERE user_id = $10 RETURNING *`,
+      [education_level, employment_status, gross_annual_income, is_large_family, large_family_category, has_disability, disability_percentage, is_single_parent, exclusion_risk, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Socio-economic data not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error updating socio-economic data' });
+  }
+});
+
+// ==========================================
+// HOUSEMATES ENDPOINTS
+// ==========================================
+
+app.get('/api/housemates', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM housemates WHERE user_id = $1 ORDER BY id ASC', [req.user.id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving housemates' });
+  }
+});
+
+app.post('/api/housemates', verifyToken, async (req, res) => {
+  const {
+    full_name, relation, document_number, lives_with, is_dependent, income_annual
+  } = req.body;
+
+  try {
+    const result = await db.query(
+      `INSERT INTO housemates (
+        user_id, full_name, relation, document_number, lives_with, is_dependent, income_annual
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, full_name, relation, document_number, lives_with, is_dependent, income_annual]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error adding housemate' });
+  }
+});
+
+app.put('/api/housemates/:id', verifyToken, async (req, res) => {
+  const housemateId = req.params.id;
+  const {
+    full_name, relation, document_number, lives_with, is_dependent, income_annual
+  } = req.body;
+
+  try {
+    const result = await db.query(
+      `UPDATE housemates SET 
+        full_name = COALESCE($1, full_name),
+        relation = COALESCE($2, relation),
+        document_number = COALESCE($3, document_number),
+        lives_with = COALESCE($4, lives_with),
+        is_dependent = COALESCE($5, is_dependent),
+        income_annual = COALESCE($6, income_annual)
+       WHERE id = $7 AND user_id = $8 RETURNING *`,
+      [full_name, relation, document_number, lives_with, is_dependent, income_annual, housemateId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Housemate not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error updating housemate' });
+  }
+});
+
+app.delete('/api/housemates/:id', verifyToken, async (req, res) => {
+  const housemateId = req.params.id;
+
+  try {
+    const result = await db.query(
+      'DELETE FROM housemates WHERE id = $1 AND user_id = $2 RETURNING id',
+      [housemateId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Housemate not found' });
+    }
+    res.json({ message: 'Housemate deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error deleting housemate' });
+  }
+});
 
 app.listen(port, () => {
   console.log(`Server started on http://localhost:${port}`);
