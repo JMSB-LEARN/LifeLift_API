@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "crons": [
+    {
+      "path": "/api/cron/sync-grants",
+      "schedule": "0 0 * * 0"
+    }
+  ]
+}

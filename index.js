@@ -432,6 +432,266 @@ app.delete('/api/housemates/:id', verifyToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// GRANTS ENDPOINTS
+// ==========================================
+
+app.get('/api/grants', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM government_grants ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving grants' });
+  }
+});
+
+app.get('/api/grants/:id', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM government_grants WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Grant not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving grant' });
+  }
+});
+
+// ==========================================
+// APPLICATIONS ENDPOINTS
+// ==========================================
+
+app.get('/api/applications', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM user_applications WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving applications' });
+  }
+});
+
+app.post('/api/applications', verifyToken, async (req, res) => {
+  const { grant_id, status, amount_granted, application_ref_number, notes, applied_at } = req.body;
+  
+  if (!grant_id) {
+    return res.status(400).json({ message: 'grant_id is required' });
+  }
+
+  try {
+    const result = await db.query(
+      `INSERT INTO user_applications (
+        user_id, grant_id, status, amount_granted, application_ref_number, notes, applied_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, grant_id, status || 'interested', amount_granted || 0, application_ref_number, notes, applied_at]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error creating application' });
+  }
+});
+
+app.put('/api/applications/:id', verifyToken, async (req, res) => {
+  const applicationId = req.params.id;
+  const { status, amount_granted, application_ref_number, notes, applied_at } = req.body;
+
+  try {
+    const result = await db.query(
+      `UPDATE user_applications SET 
+        status = COALESCE($1, status),
+        amount_granted = COALESCE($2, amount_granted),
+        application_ref_number = COALESCE($3, application_ref_number),
+        notes = COALESCE($4, notes),
+        applied_at = COALESCE($5, applied_at),
+        updated_at = NOW()
+       WHERE id = $6 AND user_id = $7 RETURNING *`,
+      [status, amount_granted, application_ref_number, notes, applied_at, applicationId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error updating application' });
+  }
+});
+
+app.delete('/api/applications/:id', verifyToken, async (req, res) => {
+  const applicationId = req.params.id;
+
+  try {
+    const result = await db.query(
+      'DELETE FROM user_applications WHERE id = $1 AND user_id = $2 RETURNING id',
+      [applicationId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+    res.json({ message: 'Application deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error deleting application' });
+  }
+});
+
+// ==========================================
+// GRANT MATCHES ENDPOINTS
+// ==========================================
+
+app.get('/api/grant-matches', verifyToken, async (req, res) => {
+  try {
+    // Join with government_grants to get grant details
+    const result = await db.query(`
+      SELECT gm.*, gg.title, gg.description, gg.min_amount, gg.max_amount, gg.opening_date, gg.closing_date 
+      FROM grant_matches gm
+      JOIN government_grants gg ON gm.grant_id = gg.id
+      WHERE gm.user_id = $1
+      ORDER BY gm.eligibility_score DESC, gm.calculated_at DESC
+    `, [req.user.id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error retrieving grant matches' });
+  }
+});
+
+app.post('/api/grant-matches', verifyToken, async (req, res) => {
+  const { grant_id, eligibility_score, is_eligible, reasons } = req.body;
+  
+  if (!grant_id) {
+    return res.status(400).json({ message: 'grant_id is required' });
+  }
+
+  try {
+    const result = await db.query(
+      `INSERT INTO grant_matches (
+        user_id, grant_id, eligibility_score, is_eligible, reasons
+      ) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.user.id, grant_id, eligibility_score || 0, is_eligible || false, reasons || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error creating grant match' });
+  }
+});
+
+app.put('/api/grant-matches/:id', verifyToken, async (req, res) => {
+  const matchId = req.params.id;
+  const { eligibility_score, is_eligible, reasons } = req.body;
+
+  try {
+    const result = await db.query(
+      `UPDATE grant_matches SET 
+        eligibility_score = COALESCE($1, eligibility_score),
+        is_eligible = COALESCE($2, is_eligible),
+        reasons = COALESCE($3, reasons),
+        calculated_at = NOW()
+       WHERE id = $4 AND user_id = $5 RETURNING *`,
+      [eligibility_score, is_eligible, reasons, matchId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Grant match not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error updating grant match' });
+  }
+});
+
+app.delete('/api/grant-matches/:id', verifyToken, async (req, res) => {
+  const matchId = req.params.id;
+
+  try {
+    const result = await db.query(
+      'DELETE FROM grant_matches WHERE id = $1 AND user_id = $2 RETURNING id',
+      [matchId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Grant match not found' });
+    }
+    res.json({ message: 'Grant match deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error deleting grant match' });
+  }
+});
+
+// ==========================================
+// CRON JOBS ENDPOINTS
+// ==========================================
+
+app.get('/api/cron/sync-grants', async (req, res) => {
+  // Vercel cron security check (optional but recommended)
+  const authHeader = req.headers['authorization'];
+  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  try {
+    const fetchUrl = process.env.BDNS_API_URL || 'https://www.infosubvenciones.es/bdnstrans/api/convocatorias/busqueda?page=0&pageSize=100&vpd=GE';
+
+    const response = await fetch(fetchUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch from BDNS: ${response.statusText}`);
+    }
+    
+    let data = await response.json();
+    // La API real de BDNS devuelve un objeto con la propiedad "content"
+    if (data && data.content && Array.isArray(data.content)) {
+      data = data.content;
+    }
+    
+    let inserted = 0;
+    for (const item of data) {
+      const external_id = item.numeroConvocatoria || item.id?.toString();
+      if (!external_id) continue;
+      
+      const check = await db.query('SELECT id FROM government_grants WHERE external_id = $1', [external_id]);
+      if (check.rows.length > 0) continue; 
+
+      const title = item.descripcion;
+      const description = item.descripcion + (item.descripcionLeng ? '\n' + item.descripcionLeng : '');
+      
+      let scope = 'National';
+      if (item.nivel1 === 'LOCAL') scope = 'Local';
+      else if (item.nivel1 === 'AUTONOMICA') scope = 'Regional';
+      else if (item.nivel1 === 'ESTADO') scope = 'National';
+      
+      const source = item.nivel3 || item.nivel2 || 'Desconocido';
+      const region_filter = item.nivel2 || null;
+      const opening_date = item.fechaRecepcion || null;
+      
+      let link_info = null;
+      if (item.rutaConvocatoria && item.rutaConvocatoria.startsWith('..')) {
+          link_info = `https://www.pap.hacienda.gob.es/bdnstrans/GE/es${item.rutaConvocatoria.substring(2)}`;
+      }
+
+      await db.query(
+        `INSERT INTO government_grants (
+          external_id, title, description, scope, region_filter, opening_date, source, link_info
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [external_id, title, description, scope, region_filter, opening_date, source, link_info]
+      );
+      inserted++;
+    }
+
+    res.status(200).json({ message: `Sincronización completada. ${inserted} nuevas convocatorias insertadas.` });
+  } catch (err) {
+    console.error('Error en cron de sincronización:', err);
+    res.status(500).json({ message: 'Error en sincronización', error: err.message });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server started on http://localhost:${port}`);
 });
