@@ -2,14 +2,19 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const cors = require('cors'); // Declarado solo una vez
 const db = require('./db');
-const cors = require('cors');
 
 const app = express();
 const port = 3000;
 const secretKey = process.env.JWT_SECRET;
 
-// Configuracion CORS
+if (!secretKey) {
+  console.error('JWT_SECRET no está definido. Crea un archivo .env con JWT_SECRET=tu-clave-secreta');
+  process.exit(1);
+}
+
+// CONFIGURACIÓN DE CORS
 app.use(cors({
   origin: 'http://localhost:4200',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -17,17 +22,12 @@ app.use(cors({
   credentials: true
 }));
 
-// Manejo de las peticiones OPTIONS
+// MANEJO DE PREFLIGHT
 app.options('*', cors());
+
+// PARSERS DE CUERPO
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
-
-
-if (!secretKey) {
-  console.error('JWT_SECRET no está definido. Crea un archivo .env con JWT_SECRET=tu-clave-secreta');
-  process.exit(1);
-}
-
 
 // Ruta publica
 app.get('/api/data', (req, res) => {
