@@ -7,40 +7,36 @@ const cors = require('cors');
 
 const app = express();
 const port = 3000;
-const secretKey = 'your-secret-key';
+const secretKey = process.env.JWT_SECRET;
+
+if (!secretKey) {
+  console.error('JWT_SECRET no está definido. Crea un archivo .env con JWT_SECRET=tu-clave-secreta');
+  process.exit(1);
+}
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
 
-// Ensure document_pdf column exists
-(async () => {
-  try {
-    await db.query('ALTER TABLE user_applications ADD COLUMN IF NOT EXISTS document_pdf BYTEA');
-    console.log('Ensured document_pdf column exists in user_applications');
-  } catch (err) {
-    console.error('Migration error: could not add document_pdf column', err);
-  }
-})();
 
-// Public route
+// Ruta publica
 app.get('/api/data', (req, res) => {
-  res.json({ message: 'This is public data' });
+  res.json({ message: 'Prueba de que el servidor funciona!' });
 });
 
-// Register route
+// Ruta de registro
 app.post('/api/register', async (req, res) => {
   const { username, email, password, first_name, surname_1, surname_2, document_number, document_type, birth_date } = req.body;
 
-  // Validate required fields
+  // Validar campos obligatorios
   if (!username || !email || !password || !first_name || !surname_1 || !document_number || !birth_date) {
     return res.status(400).json({
-      message: 'Missing required fields for registration'
+      message: 'Faltan campos obligatorios para el registro'
     });
   }
 
   try {
-    // Check if username already exists
+    // Verificar si el nombre de usuario ya existe
     const usernameCheck = await db.query(
       'SELECT * FROM users WHERE username = $1',
       [username]
@@ -48,11 +44,11 @@ app.post('/api/register', async (req, res) => {
 
     if (usernameCheck.rows.length > 0) {
       return res.status(409).json({
-        message: 'Username already exists'
+        message: 'Nombre de usuario ya existe'
       });
     }
 
-    // Check if email already exists
+    // Verificar si el correo electrónico ya existe
     const emailCheck = await db.query(
       'SELECT * FROM users WHERE email = $1',
       [email]
@@ -60,14 +56,14 @@ app.post('/api/register', async (req, res) => {
 
     if (emailCheck.rows.length > 0) {
       return res.status(409).json({
-        message: 'Email already exists'
+        message: 'El correo electrónico ya existe'
       });
     }
 
-    // Hash password for password_hash column
+    // Hashea la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert new user into database
+    // Inserta el nuevo usuario en la base de datos
     const newUser = await db.query(
       `INSERT INTO users (username, email, password_hash)
        VALUES ($1, $2, $3)
@@ -75,7 +71,7 @@ app.post('/api/register', async (req, res) => {
       [username, email, hashedPassword]
     );
 
-    // Insert profile
+    // Inserta el perfil
     await db.query(
       `INSERT INTO profiles (
         user_id, first_name, surname_1, surname_2, birth_date, document_number, document_type
@@ -86,14 +82,14 @@ app.post('/api/register', async (req, res) => {
     await recalculateMatchesForUser(newUser.rows[0].id);
 
     res.status(201).json({
-      message: 'User registered successfully. Profile created.',
+      message: 'Usuario registrado exitosamente. Perfil creado.',
       user: newUser.rows[0]
     });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({
-      message: 'Error registering user'
+      message: 'Error al registrar el usuario'
     });
   }
 });
@@ -102,7 +98,7 @@ app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
-    return res.status(400).json({ message: 'Username and password required' });
+    return res.status(400).json({ message: 'Se requiere nombre de usuario y contraseña' });
   }
 
   try {
@@ -116,17 +112,17 @@ app.post('/api/login', async (req, res) => {
     const user = result.rows[0];
 
     if (!user) {
-      return res.status(401).json({ message: 'Invalid username or password' });
+      return res.status(401).json({ message: 'Nombre de usuario o contraseña inválidos' });
     }
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
-      return res.status(401).json({ message: 'Invalid username or password' });
+      return res.status(401).json({ message: 'Nombre de usuario o contraseña inválidos' });
     }
 
     jwt.sign({ id: user.id, username: user.username }, secretKey, { expiresIn: '24h' }, (err, token) => {
       if (err) {
-        return res.status(500).json({ message: 'Error generating token' });
+        return res.status(500).json({ message: 'Error al generar el token' });
       }
       res.json({
         token,
@@ -142,16 +138,16 @@ app.post('/api/login', async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error logging in' });
+    res.status(500).json({ message: 'Error al iniciar sesión' });
   }
 });
 
-// Change Password route
+// Ruta para cambiar contraseña
 app.put('/api/change-password', verifyToken, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
-    return res.status(400).json({ message: 'Current password and new password are required' });
+    return res.status(400).json({ message: 'Se requiere contraseña actual y nueva contraseña' });
   }
 
   try {
@@ -159,28 +155,28 @@ app.put('/api/change-password', verifyToken, async (req, res) => {
     const user = result.rows[0];
 
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
     const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
     if (!validPassword) {
-      return res.status(401).json({ message: 'Invalid current password' });
+      return res.status(401).json({ message: 'Contraseña actual inválida' });
     }
 
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
     await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedNewPassword, req.user.id]);
 
-    res.json({ message: 'Password changed successfully' });
+    res.json({ message: 'Contraseña cambiada exitosamente' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error changing password' });
+    res.status(500).json({ message: 'Error al cambiar la contraseña' });
   }
 });
 
-// Protected route
+// Ruta protegida
 app.get('/api/protected', verifyToken, (req, res) => {
   res.json({
-    message: 'This is protected data',
+    message: 'Datos protegidos',
     authData: req.user
   });
 });
@@ -202,20 +198,18 @@ function verifyToken(req, res, next) {
   }
 }
 
-// ==========================================
-// PROFILES ENDPOINTS
-// ==========================================
+// RUTAS DE PERFILES
 
 app.get('/api/profile', verifyToken, async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM profiles WHERE user_id = $1', [req.user.id]);
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Profile not found' });
+      return res.status(404).json({ message: 'Perfil no encontrado' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving profile' });
+    res.status(500).json({ message: 'Error al obtener el perfil' });
   }
 });
 
@@ -229,7 +223,7 @@ app.post('/api/profile', verifyToken, async (req, res) => {
   try {
     const check = await db.query('SELECT * FROM profiles WHERE user_id = $1', [req.user.id]);
     if (check.rows.length > 0) {
-      return res.status(409).json({ message: 'Profile already exists. Use PUT to update.' });
+      return res.status(409).json({ message: 'El perfil ya existe. Usa PUT para actualizar.' });
     }
 
     const result = await db.query(
@@ -243,7 +237,7 @@ app.post('/api/profile', verifyToken, async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error creating profile' });
+    res.status(500).json({ message: 'Error al crear el perfil' });
   }
 });
 
@@ -274,29 +268,29 @@ app.put('/api/profile', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Profile not found' });
+      return res.status(404).json({ message: 'Perfil no encontrado' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error updating profile' });
+    res.status(500).json({ message: 'Error al actualizar el perfil' });
   }
 });
 
-// ==========================================
-// SOCIO-ECONOMIC DATA ENDPOINTS
-// ==========================================
+
+// RUTA DATOS SOCIO ECONOMICOS 
+
 
 app.get('/api/socio-economic', verifyToken, async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM socio_economic_data WHERE user_id = $1', [req.user.id]);
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Socio-economic data not found' });
+      return res.status(404).json({ message: 'Datos socio-económicos no encontrados' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving socio-economic data' });
+    res.status(500).json({ message: 'Error al obtener los datos socio-económicos' });
   }
 });
 
@@ -310,7 +304,7 @@ app.post('/api/socio-economic', verifyToken, async (req, res) => {
   try {
     const check = await db.query('SELECT * FROM socio_economic_data WHERE user_id = $1', [req.user.id]);
     if (check.rows.length > 0) {
-      return res.status(409).json({ message: 'Data already exists. Use PUT to update.' });
+      return res.status(409).json({ message: 'Los datos socio-económicos ya existen. Usa PUT para actualizar.' });
     }
 
     const result = await db.query(
@@ -327,7 +321,7 @@ app.post('/api/socio-economic', verifyToken, async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error creating socio-economic data' });
+    res.status(500).json({ message: 'Error al crear los datos socio-económicos' });
   }
 });
 
@@ -357,7 +351,7 @@ app.put('/api/socio-economic', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Socio-economic data not found' });
+      return res.status(404).json({ message: 'Datos socio-económicos no encontrados' });
     }
 
     await recalculateMatchesForUser(req.user.id);
@@ -365,13 +359,12 @@ app.put('/api/socio-economic', verifyToken, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error updating socio-economic data' });
+    res.status(500).json({ message: 'Error al actualizar los datos socio-económicos' });
   }
 });
 
-// ==========================================
-// HOUSEMATES ENDPOINTS
-// ==========================================
+
+// RUTAS CONVIVIENTES
 
 app.get('/api/housemates', verifyToken, async (req, res) => {
   try {
@@ -379,7 +372,7 @@ app.get('/api/housemates', verifyToken, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving housemates' });
+    res.status(500).json({ message: 'Error al obtener los convivientes' });
   }
 });
 
@@ -398,7 +391,7 @@ app.post('/api/housemates', verifyToken, async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error adding housemate' });
+    res.status(500).json({ message: 'Error al crear un conviviente' });
   }
 });
 
@@ -423,12 +416,12 @@ app.put('/api/housemates/:id', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Housemate not found' });
+      return res.status(404).json({ message: 'Conviviente no encontrado' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error updating housemate' });
+    res.status(500).json({ message: 'Error al actualizar el conviviente' });
   }
 });
 
@@ -442,18 +435,18 @@ app.delete('/api/housemates/:id', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Housemate not found' });
+      return res.status(404).json({ message: 'Conviviente no encontrado' });
     }
-    res.json({ message: 'Housemate deleted successfully' });
+    res.json({ message: 'Conviviente eliminado exitosamente' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error deleting housemate' });
+    res.status(500).json({ message: 'Error al eliminar el conviviente' });
   }
 });
 
-// ==========================================
-// GRANTS ENDPOINTS
-// ==========================================
+
+// RUTAS DE AYUDAS GUBERNAMENTALES 
+
 
 app.get('/api/grants', verifyToken, async (req, res) => {
   try {
@@ -461,7 +454,7 @@ app.get('/api/grants', verifyToken, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving grants' });
+    res.status(500).json({ message: 'Error al obtener las ayudas' });
   }
 });
 
@@ -469,34 +462,40 @@ app.get('/api/grants/:id', verifyToken, async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM government_grants WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Grant not found' });
+      return res.status(404).json({ message: 'Ayuda no encontrada' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving grant' });
+    res.status(500).json({ message: 'Error al obtener la ayuda' });
   }
 });
 
-// ==========================================
-// APPLICATIONS ENDPOINTS
-// ==========================================
+
+// RUTAS DE SOLICITUDES 
 
 app.get('/api/applications', verifyToken, async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM user_applications WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    const result = await db.query(`
+      SELECT id, user_id, grant_id, status, amount_granted, application_ref_number, 
+             notes, applied_at, created_at, updated_at,
+             (document_pdf IS NOT NULL) as has_document
+      FROM user_applications 
+      WHERE user_id = $1 
+      ORDER BY created_at DESC
+    `, [req.user.id]);
     res.json(result.rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving applications' });
+    res.status(500).json({ message: 'Error al obtener las solicitudes' });
   }
 });
 
 app.post('/api/applications', verifyToken, async (req, res) => {
   const { grant_id, status, amount_granted, application_ref_number, notes, applied_at } = req.body;
-  
+
   if (!grant_id) {
-    return res.status(400).json({ message: 'grant_id is required' });
+    return res.status(400).json({ message: 'Se requiere grant_id' });
   }
 
   try {
@@ -509,7 +508,7 @@ app.post('/api/applications', verifyToken, async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error creating application' });
+    res.status(500).json({ message: 'Error al crear la solicitud' });
   }
 });
 
@@ -531,66 +530,80 @@ app.put('/api/applications/:id', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Application not found' });
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error updating application' });
+    res.status(500).json({ message: 'Error al actualizar la solicitud' });
   }
 });
 
-// Upload PDF document
+// Ruta para subir documento PDF de la solicitud
 app.put('/api/applications/:id/document', verifyToken, async (req, res) => {
   const applicationId = req.params.id;
-  const { document_pdf } = req.body;
+  const { document_pdf, document_name } = req.body; 
 
   if (!document_pdf) {
-    return res.status(400).json({ message: 'document_pdf is required' });
+    return res.status(400).json({ message: 'Se requiere document_pdf' });
   }
 
   try {
-    const check = await db.query('SELECT id FROM user_applications WHERE id = $1 AND user_id = $2', [applicationId, req.user.id]);
-    if (check.rows.length === 0) {
-      return res.status(404).json({ message: 'Application not found' });
-    }
-
     const base64Data = document_pdf.replace(/^data:application\/pdf;base64,/, "");
     const buffer = Buffer.from(base64Data, 'base64');
 
     await db.query(
-      'UPDATE user_applications SET document_pdf = $1 WHERE id = $2',
-      [buffer, applicationId]
+      'UPDATE user_applications SET document_pdf = $1, document_name = $2 WHERE id = $3 AND user_id = $4',
+      [buffer, document_name, applicationId, req.user.id]
     );
-
-    res.json({ message: 'Document uploaded successfully' });
+    res.json({ message: 'Documento subido exitosamente' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Error uploading document' });
+    res.status(500).json({ message: 'Error al subir el documento' });
   }
 });
 
-// Retrieve PDF document
+// Ruta para eliminar el documento PDF de la solicitud
+app.delete('/api/applications/:id/document', verifyToken, async (req, res) => {
+  const applicationId = req.params.id;
+
+  try {
+    const result = await db.query(
+      'UPDATE user_applications SET document_pdf = NULL, document_name = NULL WHERE id = $1 AND user_id = $2 RETURNING id',
+      [applicationId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
+    }
+    res.json({ message: 'Documento eliminado exitosamente' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al eliminar el documento' });
+  }
+});
+
+
+
+// Ruta para obtener el documento PDF de la solicitud
 app.get('/api/applications/:id/document', verifyToken, async (req, res) => {
   const applicationId = req.params.id;
 
   try {
     const result = await db.query('SELECT document_pdf FROM user_applications WHERE id = $1 AND user_id = $2', [applicationId, req.user.id]);
-    
+
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Application not found' });
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
     }
 
     const doc = result.rows[0].document_pdf;
     if (!doc) {
-      return res.status(404).json({ message: 'No document attached' });
+      return res.status(404).json({ message: 'No se adjuntó ningún documento' });
     }
 
     const base64 = doc.toString('base64');
     res.json({ document_pdf: `data:application/pdf;base64,${base64}` });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving document' });
+    res.status(500).json({ message: 'Error al obtener el documento' });
   }
 });
 
@@ -604,22 +617,21 @@ app.delete('/api/applications/:id', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Application not found' });
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
     }
-    res.json({ message: 'Application deleted successfully' });
+    res.json({ message: 'Solicitud eliminada exitosamente' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error deleting application' });
+    res.status(500).json({ message: 'Error al eliminar la solicitud' });
   }
 });
 
-// ==========================================
-// GRANT MATCHES ENDPOINTS
-// ==========================================
+
+// RUTAS DE AYUDAS GUBERNAMENTALES 
+
 
 app.get('/api/grant-matches', verifyToken, async (req, res) => {
   try {
-    // Join with government_grants to get grant details
     const result = await db.query(`
       SELECT gm.*, gg.title, gg.description, gg.min_amount, gg.max_amount, gg.opening_date, gg.closing_date 
       FROM grant_matches gm
@@ -630,15 +642,15 @@ app.get('/api/grant-matches', verifyToken, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error retrieving grant matches' });
+    res.status(500).json({ message: 'Error al obtener las ayudas' });
   }
 });
 
 app.post('/api/grant-matches', verifyToken, async (req, res) => {
   const { grant_id, eligibility_score, is_eligible, reasons } = req.body;
-  
+
   if (!grant_id) {
-    return res.status(400).json({ message: 'grant_id is required' });
+    return res.status(400).json({ message: 'Se requiere grant_id' });
   }
 
   try {
@@ -651,7 +663,7 @@ app.post('/api/grant-matches', verifyToken, async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error creating grant match' });
+    res.status(500).json({ message: 'Error al crear el match de ayudas' });
   }
 });
 
@@ -671,12 +683,12 @@ app.put('/api/grant-matches/:id', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Grant match not found' });
+      return res.status(404).json({ message: 'Match de ayudas no encontrado' });
     }
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error updating grant match' });
+    res.status(500).json({ message: 'Error al actualizar el match de ayudas' });
   }
 });
 
@@ -690,18 +702,17 @@ app.delete('/api/grant-matches/:id', verifyToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Grant match not found' });
+      return res.status(404).json({ message: 'Match de ayudas no encontrado' });
     }
-    res.json({ message: 'Grant match deleted successfully' });
+    res.json({ message: 'Match de ayudas eliminado exitosamente' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Error deleting grant match' });
+    res.status(500).json({ message: 'Error al eliminar el match de ayudas' });
   }
 });
 
-// ==========================================
-// UTILITY FUNCTIONS
-// ==========================================
+// UTILIDADES
+
 
 function parseEligibilityRules(title, description) {
   const text = (title + ' ' + description).toLowerCase();
@@ -829,15 +840,14 @@ async function recalculateMatchesForUser(userId) {
   }
 }
 
-// ==========================================
-// CRON JOBS ENDPOINTS
-// ==========================================
+
+// CRON JOBS (Sincronizacion de ayudas)
+
 
 app.get('/api/cron/sync-grants', async (req, res) => {
-  // Vercel cron security check (optional but recommended)
   const authHeader = req.headers['authorization'];
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ message: 'Unauthorized' });
+    return res.status(401).json({ message: 'No autorizado' });
   }
 
   try {
@@ -847,37 +857,37 @@ app.get('/api/cron/sync-grants', async (req, res) => {
     if (!response.ok) {
       throw new Error(`Failed to fetch from BDNS: ${response.statusText}`);
     }
-    
+
     let data = await response.json();
     // La API real de BDNS devuelve un objeto con la propiedad "content"
     if (data && data.content && Array.isArray(data.content)) {
       data = data.content;
     }
-    
+
     let inserted = 0;
     let newGrantIds = [];
     for (const item of data) {
       const external_id = item.numeroConvocatoria || item.id?.toString();
       if (!external_id) continue;
-      
+
       const check = await db.query('SELECT id FROM government_grants WHERE external_id = $1', [external_id]);
-      if (check.rows.length > 0) continue; 
+      if (check.rows.length > 0) continue;
 
       const title = item.descripcion;
       const description = item.descripcion + (item.descripcionLeng ? '\n' + item.descripcionLeng : '');
-      
+
       let scope = 'National';
       if (item.nivel1 === 'LOCAL') scope = 'Local';
       else if (item.nivel1 === 'AUTONOMICA') scope = 'Regional';
       else if (item.nivel1 === 'ESTADO') scope = 'National';
-      
+
       const source = item.nivel3 || item.nivel2 || 'Desconocido';
       const region_filter = item.nivel2 || null;
       const opening_date = item.fechaRecepcion || null;
-      
+
       let link_info = null;
       if (item.rutaConvocatoria && item.rutaConvocatoria.startsWith('..')) {
-          link_info = `https://www.pap.hacienda.gob.es/bdnstrans/GE/es${item.rutaConvocatoria.substring(2)}`;
+        link_info = `https://www.pap.hacienda.gob.es/bdnstrans/GE/es${item.rutaConvocatoria.substring(2)}`;
       }
 
       const eligibility_rules = parseEligibilityRules(title, description);
@@ -888,7 +898,7 @@ app.get('/api/cron/sync-grants', async (req, res) => {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
         [external_id, title, description, scope, region_filter, opening_date, source, link_info, eligibility_rules ? JSON.stringify(eligibility_rules) : null]
       );
-      
+
       if (resInsert.rows.length > 0) {
         newGrantIds.push({ id: resInsert.rows[0].id, rules: eligibility_rules });
         inserted++;
@@ -906,7 +916,7 @@ app.get('/api/cron/sync-grants', async (req, res) => {
         for (const user of usersRes.rows) {
           for (const grant of newGrantIds) {
             const match = calculateGrantScore(user, grant.rules);
-            
+
             await db.query(`
               INSERT INTO grant_matches (user_id, grant_id, eligibility_score, is_eligible, reasons)
               VALUES ($1, $2, $3, $4, $5)

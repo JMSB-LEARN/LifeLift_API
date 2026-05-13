@@ -11,7 +11,6 @@ async function inspect() {
     } catch (err) {
         console.error('Error inspecting table:', err);
     } finally {
-        // process.exit() might be needed if pool doesn't close
         setTimeout(() => process.exit(), 1000);
     }
 }
