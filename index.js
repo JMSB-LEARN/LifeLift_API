@@ -29,7 +29,7 @@ app.use((req, res, next) => {
 
 // CONFIGURACIÓN DE CORS
 app.use(cors({
-  origin: 'http://localhost:4200',
+  origin: 'https://life-lift.vercel.app',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
