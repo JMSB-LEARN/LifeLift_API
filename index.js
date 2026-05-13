@@ -9,15 +9,6 @@ const app = express();
 const port = 3000;
 const secretKey = process.env.JWT_SECRET;
 
-if (!secretKey) {
-  console.error('JWT_SECRET no está definido. Crea un archivo .env con JWT_SECRET=tu-clave-secreta');
-  process.exit(1);
-}
-
-const cors = require('cors');
-
-const cors = require('cors');
-
 // Configuracion CORS
 app.use(cors({
   origin: 'http://localhost:4200',
@@ -30,6 +21,12 @@ app.use(cors({
 app.options('*', cors());
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
+
+
+if (!secretKey) {
+  console.error('JWT_SECRET no está definido. Crea un archivo .env con JWT_SECRET=tu-clave-secreta');
+  process.exit(1);
+}
 
 
 // Ruta publica
