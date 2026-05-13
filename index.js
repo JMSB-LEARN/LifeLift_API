@@ -16,14 +16,17 @@ if (!secretKey) {
 
 const cors = require('cors');
 
-// Configuración de CORS
+const cors = require('cors');
+
+// Configuracion CORS
 app.use(cors({
-  origin: 'http://localhost:4200', 
+  origin: 'http://localhost:4200',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
+// Manejo de las peticiones OPTIONS
 app.options('*', cors());
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
