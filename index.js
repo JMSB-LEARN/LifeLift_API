@@ -519,7 +519,7 @@ app.delete('/api/housemates/:id', verifyToken, async (req, res) => {
 // RUTAS DE AYUDAS GUBERNAMENTALES 
 
 
-app.get('/api/grants', verifyToken, async (req, res) => {
+app.get('/api/grants', async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM government_grants ORDER BY created_at DESC');
     res.json(result.rows);
@@ -529,7 +529,7 @@ app.get('/api/grants', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/grants/:id', verifyToken, async (req, res) => {
+app.get('/api/grants/:id', async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM government_grants WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) {
