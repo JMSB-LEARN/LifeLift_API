@@ -771,6 +771,19 @@ function calculateGrantScore(userSocioEconomicData, eligibilityRules) {
   }
 
   const userData = userSocioEconomicData || {};
+  // Comprobamos si la ayuda tiene un filtro de región y si el usuario tiene una comunidad asignada (Ajuste de clase)
+  if (eligibilityRules.region_filter && userData.autonomous_community) {
+    const ruleRegion = eligibilityRules.region_filter.toLowerCase().trim();
+    const userRegion = userData.autonomous_community.toLowerCase().trim();
+
+    if (ruleRegion !== userRegion) {
+      is_eligible = false;
+      score = 0;
+      reasons.push(`Esta ayuda es específica para ${eligibilityRules.region_filter} y tú resides en ${userData.autonomous_community}.`);
+      return { score, is_eligible, reasons }; 
+      // Salimos pronto porque si no es de su región, no importa el resto
+    }
+  }
 
   if (eligibilityRules.is_single_parent) {
     if (userData.is_single_parent) {
@@ -837,29 +850,50 @@ function calculateGrantScore(userSocioEconomicData, eligibilityRules) {
 
 async function recalculateMatchesForUser(userId) {
   try {
-    const usersRes = await db.query(`
-      SELECT u.id, s.employment_status, s.is_large_family, s.has_disability, s.is_single_parent, s.exclusion_risk 
+    // 1. Iniciar transacción para asegurar integridad
+    await db.query('BEGIN');
+
+    // 2. BORRAR CÁLCULOS PREVIOS
+    // Esto limpia el historial de matches de este usuario específico
+    await db.query('DELETE FROM grant_matches WHERE user_id = $1', [userId]);
+
+    // 3. Obtener datos frescos del usuario (Perfil + Datos Socioeconómicos)
+    const userRes = await db.query(`
+      SELECT s.*, p.province, p.autonomous_community, p.is_gender_violence_victim 
       FROM users u
       LEFT JOIN socio_economic_data s ON u.id = s.user_id
+      LEFT JOIN profiles p ON u.id = p.user_id
       WHERE u.id = $1
     `, [userId]);
 
-    if (usersRes.rows.length === 0) return;
-    const user = usersRes.rows[0];
+    if (userRes.rows.length === 0) {
+      await db.query('COMMIT');
+      return;
+    }
+    const user = userRes.rows[0];
 
+    // 4. Obtener todas las ayudas disponibles
     const grantsRes = await db.query(`SELECT id, eligibility_rules FROM government_grants`);
 
-    await db.query(`DELETE FROM grant_matches WHERE user_id = $1`, [userId]);
-
+    // 5. Calcular e Insertar los nuevos matches
     for (const grant of grantsRes.rows) {
+      // Usamos tu lógica de cálculo existente
       const match = calculateGrantScore(user, grant.eligibility_rules);
+      
       await db.query(`
         INSERT INTO grant_matches (user_id, grant_id, eligibility_score, is_eligible, reasons)
         VALUES ($1, $2, $3, $4, $5)
-      `, [user.id, grant.id, match.score, match.is_eligible, JSON.stringify(match.reasons)]);
+      `, [userId, grant.id, match.score, match.is_eligible, JSON.stringify(match.reasons)]);
     }
+
+    // 6. Confirmar cambios
+    await db.query('COMMIT');
+    console.log(`Recálculo completado con éxito para el usuario ${userId}`);
+
   } catch (err) {
-    console.error(`Error recalculando matches para el usuario ${userId}:`, err);
+    // Si algo falla, deshacemos el borrado para no perder los datos anteriores
+    await db.query('ROLLBACK');
+    console.error(`Error crítico recalculando matches para el usuario ${userId}:`, err);
   }
 }
 
