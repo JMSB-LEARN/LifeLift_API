@@ -839,6 +839,77 @@ app.delete('/api/grant-matches/:id', verifyToken, async (req, res) => {
   }
 });
 
+// RUTAS DE COMENTARIOS
+
+app.get('/api/grants/:id/comments', verifyToken, async (req, res) => {
+  const grantId = req.params.id;
+  try {
+    const result = await db.query(`
+      SELECT gc.id, gc.grant_id, gc.user_id, gc.parent_id, gc.comment_text, gc.reports_count, gc.created_at,
+             p.first_name, p.surname_1 as surname
+      FROM grant_comments gc
+      JOIN profiles p ON gc.user_id = p.user_id
+      WHERE gc.grant_id = $1
+      ORDER BY gc.created_at ASC
+    `, [grantId]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al obtener los comentarios' });
+  }
+});
+
+app.post('/api/grants/:id/comments', verifyToken, async (req, res) => {
+  const grantId = req.params.id;
+  const { comment_text, parent_id } = req.body;
+
+  if (!comment_text || comment_text.trim() === '') {
+    return res.status(400).json({ message: 'El comentario no puede estar vacío' });
+  }
+
+  try {
+    const result = await db.query(`
+      INSERT INTO grant_comments (grant_id, user_id, parent_id, comment_text)
+      VALUES ($1, $2, $3, $4) RETURNING *
+    `, [grantId, req.user.id, parent_id || null, comment_text]);
+
+    // Obtener datos del perfil para devolverlo completo
+    const profile = await db.query('SELECT first_name, surname_1 as surname FROM profiles WHERE user_id = $1', [req.user.id]);
+    
+    const newComment = {
+      ...result.rows[0],
+      first_name: profile.rows[0]?.first_name,
+      surname: profile.rows[0]?.surname
+    };
+
+    res.status(201).json(newComment);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al crear el comentario' });
+  }
+});
+
+app.post('/api/comments/:id/report', verifyToken, async (req, res) => {
+  const commentId = req.params.id;
+  try {
+    const result = await db.query(`
+      UPDATE grant_comments 
+      SET reports_count = reports_count + 1 
+      WHERE id = $1 RETURNING id, reports_count
+    `, [commentId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Comentario no encontrado' });
+    }
+    
+    res.json({ message: 'Comentario reportado', reports_count: result.rows[0].reports_count });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al reportar el comentario' });
+  }
+});
+
+
 // UTILIDADES
 
 
