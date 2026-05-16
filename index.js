@@ -862,7 +862,8 @@ app.get('/api/grants/:id/comments', verifyToken, async (req, res) => {
   const grantId = req.params.id;
   try {
     const result = await db.query(`
-      SELECT gc.id, gc.grant_id, gc.user_id, gc.parent_id, gc.comment_text, gc.reports_count, gc.created_at,
+      SELECT gc.id, gc.grant_id, gc.user_id, gc.parent_id, gc.reports_count, gc.created_at, gc.is_deleted,
+             CASE WHEN gc.is_deleted THEN 'Este comentario ha sido eliminado por un administrador' ELSE gc.comment_text END as comment_text,
              p.first_name, p.surname_1 as surname
       FROM grant_comments gc
       JOIN profiles p ON gc.user_id = p.user_id
@@ -923,6 +924,59 @@ app.post('/api/comments/:id/report', verifyToken, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Error al reportar el comentario' });
+  }
+});
+
+// RUTAS DE ADMINISTRADOR - COMENTARIOS
+
+app.get('/api/admin/comments/reported', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT gc.id, gc.grant_id, gc.user_id, gc.parent_id, gc.comment_text, gc.reports_count, gc.created_at, gc.is_deleted,
+             p.first_name, p.surname_1 as surname,
+             g.title as grant_title
+      FROM grant_comments gc
+      JOIN profiles p ON gc.user_id = p.user_id
+      JOIN government_grants g ON gc.grant_id = g.id
+      WHERE gc.reports_count > 0 AND gc.is_deleted = FALSE
+      ORDER BY gc.reports_count DESC, gc.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al obtener comentarios reportados' });
+  }
+});
+
+app.put('/api/admin/comments/:id/delete', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await db.query(
+      'UPDATE grant_comments SET is_deleted = TRUE WHERE id = $1 RETURNING id',
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Comentario no encontrado' });
+    }
+    res.json({ message: 'Comentario eliminado correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al eliminar comentario' });
+  }
+});
+
+app.put('/api/admin/comments/:id/dismiss-reports', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await db.query(
+      'UPDATE grant_comments SET reports_count = 0 WHERE id = $1 RETURNING id',
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Comentario no encontrado' });
+    }
+    res.json({ message: 'Reportes descartados correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al descartar reportes' });
   }
 });
 
