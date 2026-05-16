@@ -83,8 +83,22 @@ app.post('/api/register', async (req, res) => {
       });
     }
 
+    // Verificar si el documento ya existe
+    const documentCheck = await db.query(
+      'SELECT * FROM profiles WHERE document_number = $1',
+      [document_number]
+    );
+
+    if (documentCheck.rows.length > 0) {
+      return res.status(409).json({
+        message: 'El número de documento ya está registrado'
+      });
+    }
+
     // Hashea la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    await db.query('BEGIN');
 
     // Inserta el nuevo usuario en la base de datos
     const newUser = await db.query(
@@ -102,6 +116,8 @@ app.post('/api/register', async (req, res) => {
       [newUser.rows[0].id, first_name, surname_1, surname_2 || null, birth_date, document_number, document_type || 'DNI']
     );
 
+    await db.query('COMMIT');
+
     await recalculateMatchesForUser(newUser.rows[0].id);
 
     res.status(201).json({
@@ -110,6 +126,7 @@ app.post('/api/register', async (req, res) => {
     });
 
   } catch (err) {
+    await db.query('ROLLBACK');
     console.error(err);
     res.status(500).json({
       message: 'Error al registrar el usuario'
