@@ -900,98 +900,63 @@ async function recalculateMatchesForUser(userId) {
 
 // CRON JOBS (Sincronizacion de ayudas)
 
-
 app.get('/api/cron/sync-grants', async (req, res) => {
-  const authHeader = req.headers['authorization'];
-  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ message: 'No autorizado' });
-  }
-
   try {
-    const fetchUrl = process.env.BDNS_API_URL || 'https://www.infosubvenciones.es/bdnstrans/api/convocatorias/busqueda?page=0&pageSize=100&vpd=GE';
-
-    const response = await fetch(fetchUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch from BDNS: ${response.statusText}`);
-    }
-
-    let data = await response.json();
-    // La API real de BDNS devuelve un objeto con la propiedad "content"
-    if (data && data.content && Array.isArray(data.content)) {
-      data = data.content;
-    }
-
-    let inserted = 0;
-    let newGrantIds = [];
-    for (const item of data) {
-      const external_id = item.numeroConvocatoria || item.id?.toString();
-      if (!external_id) continue;
-
-      const check = await db.query('SELECT id FROM government_grants WHERE external_id = $1', [external_id]);
-      if (check.rows.length > 0) continue;
-
-      const title = item.descripcion;
-      const description = item.descripcion + (item.descripcionLeng ? '\n' + item.descripcionLeng : '');
-
-      let scope = 'National';
-      if (item.nivel1 === 'LOCAL') scope = 'Local';
-      else if (item.nivel1 === 'AUTONOMICA') scope = 'Regional';
-      else if (item.nivel1 === 'ESTADO') scope = 'National';
-
-      const source = item.nivel3 || item.nivel2 || 'Desconocido';
-      const region_filter = item.nivel2 || null;
-      const opening_date = item.fechaRecepcion || null;
-
-      let link_info = null;
-      if (item.rutaConvocatoria && item.rutaConvocatoria.startsWith('..')) {
-        link_info = `https://www.pap.hacienda.gob.es/bdnstrans/GE/es${item.rutaConvocatoria.substring(2)}`;
-      }
-
-      const eligibility_rules = parseEligibilityRules(title, description);
-
-      const resInsert = await db.query(
-        `INSERT INTO government_grants (
-          external_id, title, description, scope, region_filter, opening_date, source, link_info, eligibility_rules
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-        [external_id, title, description, scope, region_filter, opening_date, source, link_info, eligibility_rules ? JSON.stringify(eligibility_rules) : null]
-      );
-
-      if (resInsert.rows.length > 0) {
-        newGrantIds.push({ id: resInsert.rows[0].id, rules: eligibility_rules });
-        inserted++;
-      }
-    }
-
-    // Actualizar Grant Matches para las nuevas convocatorias
-    if (newGrantIds.length > 0) {
-      try {
-        const usersRes = await db.query(`
-          SELECT u.id, s.employment_status, s.is_large_family, s.has_disability, s.is_single_parent, s.exclusion_risk 
-          FROM users u
-          LEFT JOIN socio_economic_data s ON u.id = s.user_id
-        `);
-        for (const user of usersRes.rows) {
-          for (const grant of newGrantIds) {
-            const match = calculateGrantScore(user, grant.rules);
-
-            await db.query(`
-              INSERT INTO grant_matches (user_id, grant_id, eligibility_score, is_eligible, reasons)
-              VALUES ($1, $2, $3, $4, $5)
-            `, [user.id, grant.id, match.score, match.is_eligible, JSON.stringify(match.reasons)]);
-          }
-        }
-        console.log(`Se han actualizado los grant_matches para ${usersRes.rows.length} usuarios y ${newGrantIds.length} ayudas.`);
-      } catch (matchErr) {
-        console.error('Error actualizando grant_matches:', matchErr);
-      }
-    }
-
-    res.status(200).json({ message: `Sincronización completada. ${inserted} nuevas convocatorias insertadas.` });
+    const inserted = await syncGrants();
+    res.json({ message: `Insertadas ${inserted} ayudas` });
   } catch (err) {
-    console.error('Error en cron de sincronización:', err);
-    res.status(500).json({ message: 'Error en sincronización', error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
+
+async function syncGrants() {
+  const fetchUrl = process.env.BDNS_API_URL || 'https://www.infosubvenciones.es/bdnstrans/api/convocatorias/busqueda?page=0&pageSize=100&vpd=GE';
+
+  const response = await fetch(fetchUrl);
+  if (!response.ok) throw new Error('BDNS error');
+
+  let data = await response.json();
+  if (data?.content) data = data.content;
+
+  let inserted = 0;
+
+  for (const item of data) {
+    const external_id = item.numeroConvocatoria || item.id?.toString();
+    if (!external_id) continue;
+
+    const check = await db.query(
+      'SELECT id FROM government_grants WHERE external_id = $1',
+      [external_id]
+    );
+
+    if (check.rows.length > 0) continue;
+
+    const title = item.descripcion;
+    const description = item.descripcion;
+
+    const eligibility_rules = parseEligibilityRules(title, description);
+
+    await db.query(`
+      INSERT INTO government_grants (
+        external_id, title, description, scope, region_filter, opening_date, source, link_info, eligibility_rules
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `, [
+      external_id,
+      title,
+      description,
+      'National',
+      item.nivel2 || null,
+      item.fechaRecepcion || null,
+      item.nivel3 || 'Desconocido',
+      item.rutaConvocatoria || null,
+      eligibility_rules ? JSON.stringify(eligibility_rules) : null
+    ]);
+
+    inserted++;
+  }
+
+  return inserted;
+}
 
 app.listen(port, () => {
   console.log(`Server started on http://localhost:${port}`);
