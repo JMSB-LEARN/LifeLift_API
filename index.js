@@ -155,7 +155,8 @@ app.post('/api/login', async (req, res) => {
           email: user.email,
           first_name: user.first_name,
           surname: user.surname,
-          second_surname: user.second_surname
+          second_surname: user.second_surname,
+          is_admin: user.is_admin
         }
       });
     });
@@ -220,6 +221,36 @@ function verifyToken(req, res, next) {
     res.sendStatus(403);
   }
 }
+
+// Middleware para verificar admin
+async function verifyAdmin(req, res, next) {
+  try {
+    const result = await db.query('SELECT is_admin FROM users WHERE id = $1', [req.user.id]);
+    if (result.rows.length === 0 || !result.rows[0].is_admin) {
+      return res.status(403).json({ message: 'No tienes permisos de administrador' });
+    }
+    next();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error de servidor verificando administrador' });
+  }
+}
+
+app.post('/api/make-me-admin', verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      'UPDATE users SET is_admin = true WHERE id = $1 RETURNING id, username, is_admin',
+      [req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    res.json({ message: 'Ahora eres administrador', user: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al hacerte administrador' });
+  }
+});
 
 // RUTAS DE PERFILES
 
@@ -497,11 +528,85 @@ app.get('/api/grants/:id', verifyToken, async (req, res) => {
 
 // RUTAS DE SOLICITUDES 
 
+app.get('/api/admin/applications', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT ua.id, ua.user_id, ua.grant_id, ua.status, ua.amount_granted, 
+             ua.application_ref_number, ua.notes, ua.applied_at, ua.created_at, ua.updated_at,
+             ua.document_status, ua.admin_comments,
+             (ua.document_pdf IS NOT NULL) as has_document, ua.document_name,
+             p.first_name, p.surname_1 as surname, p.surname_2 as second_surname,
+             p.document_number, p.document_type
+      FROM user_applications ua
+      JOIN profiles p ON ua.user_id = p.user_id
+      ORDER BY ua.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al obtener las solicitudes de los usuarios' });
+  }
+});
+
+app.put('/api/admin/applications/:id/status', verifyToken, verifyAdmin, async (req, res) => {
+  const applicationId = req.params.id;
+  const { document_status, admin_comments } = req.body;
+
+  if (!document_status) {
+    return res.status(400).json({ message: 'Se requiere document_status ("Pending", "Correct", "Missing Documents", "Incorrect")' });
+  }
+
+  try {
+    const result = await db.query(
+      `UPDATE user_applications SET 
+        document_status = $1,
+        admin_comments = $2,
+        updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [document_status, admin_comments, applicationId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al actualizar el estado del documento' });
+  }
+});
+
+app.get('/api/admin/applications/:id/document', verifyToken, verifyAdmin, async (req, res) => {
+  const applicationId = req.params.id;
+
+  try {
+    const result = await db.query('SELECT document_pdf FROM user_applications WHERE id = $1', [applicationId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
+    }
+
+    const doc = result.rows[0].document_pdf;
+    if (!doc) {
+      return res.status(404).json({ message: 'No se adjuntó ningún documento' });
+    }
+
+    const base64 = doc.toString('base64');
+    res.json({
+      document_pdf: `data:application/pdf;base64,${base64}`
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al obtener el documento' });
+  }
+});
+
 app.get('/api/applications', verifyToken, async (req, res) => {
   try {
     const result = await db.query(`
       SELECT id, user_id, grant_id, status, amount_granted, application_ref_number, 
              notes, applied_at, created_at, updated_at,
+             document_status, admin_comments,
              (document_pdf IS NOT NULL) as has_document
       FROM user_applications 
       WHERE user_id = $1 
