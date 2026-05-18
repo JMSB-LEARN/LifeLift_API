@@ -2,7 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const cors = require('cors'); // Declarado solo una vez
+const cors = require('cors');
 const db = require('./db');
 
 const app = express();
@@ -1124,7 +1124,6 @@ async function recalculateMatchesForUser(userId) {
 
     // 5. Calcular e Insertar los nuevos matches
     for (const grant of grantsRes.rows) {
-      // Usamos tu lógica de cálculo existente
       const match = calculateGrantScore(user, grant.eligibility_rules);
       
       await db.query(`
